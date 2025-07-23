@@ -1176,14 +1176,23 @@ extension StateGraph {
                         
                         // Check for external pause requests
                         if shouldPauseExecution() {
-                            break
+                            // Add Checkpoint So it can be used later
+                            if let saver = compileConfig?.checkpointSaver {
+                                let _ = try saver.put(config: config,
+                                        checkpoint: .init(state: currentState.data.clone(),
+                                        nodeId: currentNodeId,
+                                        nextNodeId: nextNodeId))
+                            }
+
+                            continuation.finish(throwing: CompiledGraphError.executionError("Execution paused by user"))
+                            return
                         }
                         
                         currentNodeId = nextNodeId;
 
                         guard let action = nodes[currentNodeId] else {
                             continuation.finish(throwing: CompiledGraphError.missingNode("node: \(currentNodeId) not found!"))
-                            break
+                            return
                         }
                         
                         if( config.verbose) {
@@ -1214,8 +1223,17 @@ extension StateGraph {
                                     currentState = try mergeState(currentState: currentStateEmbed,
                                                                   partialState: partialState.filter( { $0.key != key } ))
                                 }
+                                // Add Checkpoint So it can be used later
+                                if let saver = compileConfig?.checkpointSaver {
+
+                                    let _ = try saver.put(config: config,
+                                            checkpoint: .init(state: currentState.data.clone(),
+                                                nodeId: currentNodeId,
+                                                nextNodeId: nextNodeId))
+                                }
+                                continuation.finish(throwing: CompiledGraphError.executionError("Embed stream stopped because user paused it"))
                                 // Break from main loop due to pause
-                                break
+                                return
                             }
                             
                             guard let currentStateEmbed  else {
@@ -1250,7 +1268,16 @@ extension StateGraph {
                         
                         // Check for external pause requests after yielding output
                         if shouldPauseExecution() {
-                            break
+                            // Add Checkpoint to help resume it properly
+                            if let saver = compileConfig?.checkpointSaver {
+
+                                let _ = try saver.put(config: config,
+                                        checkpoint: .init(state: currentState.data.clone(),
+                                            nodeId: currentNodeId,
+                                            nextNodeId: nextNodeId))
+                            }
+                            continuation.finish(throwing: CompiledGraphError.executionError("Pausing as user requested it"))
+                            return
                         }
 
                     } while(nextNodeId != END && !Task.isCancelled)
