@@ -949,6 +949,17 @@ extension StateGraph {
         /// The schema representing the channels in the graph.
         let schema: Channels
         
+        // MARK: - Pause functionality
+        private let pauseLock = NSLock()
+        private var _shouldPause: Bool = false
+        
+        /// Indicates whether the graph execution should pause and terminate early
+        public var shouldPause: Bool {
+            pauseLock.lock()
+            defer { pauseLock.unlock() }
+            return _shouldPause
+        }
+        
         /**
          Initializes a new instance of `CompiledGraph`.
          
@@ -1109,6 +1120,8 @@ extension StateGraph {
             
             Task {
                 do {
+                    // Clear any existing pause flag when starting new execution
+                    self.clearPause()
                     
                     var currentState: State
                     var currentNodeId: String
@@ -1161,11 +1174,25 @@ extension StateGraph {
                             isFirstStepAfterResume = false
                         }
                         
+                        // Check for external pause requests
+                        if shouldPauseExecution() {
+                            // Add Checkpoint So it can be used later
+                            if let saver = compileConfig?.checkpointSaver {
+                                let _ = try saver.put(config: config,
+                                        checkpoint: .init(state: currentState.data.clone(),
+                                        nodeId: currentNodeId,
+                                        nextNodeId: nextNodeId))
+                            }
+
+                            continuation.finish(throwing: CompiledGraphError.executionError("Execution paused by user"))
+                            return
+                        }
+                        
                         currentNodeId = nextNodeId;
 
                         guard let action = nodes[currentNodeId] else {
                             continuation.finish(throwing: CompiledGraphError.missingNode("node: \(currentNodeId) not found!"))
-                            break
+                            return
                         }
                         
                         if( config.verbose) {
@@ -1178,11 +1205,37 @@ extension StateGraph {
                         // Support embed stream
                         if let (key, embed ) = findEmbedStream(partialState: partialState) {
                             var currentStateEmbed:State?
+                            var pausedDuringEmbed = false
                             for try await output in embed {
                                 try Task.checkCancellation()
+                                if shouldPauseExecution() {
+                                    pausedDuringEmbed = true
+                                    currentStateEmbed = output.state
+                                    break
+                                }
                                 continuation.yield(output)
                                 currentStateEmbed = output.state
                             }
+                            
+                            if pausedDuringEmbed {
+                                // If we paused during embedded stream, use the last state we got
+                                if let currentStateEmbed {
+                                    currentState = try mergeState(currentState: currentStateEmbed,
+                                                                  partialState: partialState.filter( { $0.key != key } ))
+                                }
+                                // Add Checkpoint So it can be used later
+                                if let saver = compileConfig?.checkpointSaver {
+
+                                    let _ = try saver.put(config: config,
+                                            checkpoint: .init(state: currentState.data.clone(),
+                                                nodeId: currentNodeId,
+                                                nextNodeId: nextNodeId))
+                                }
+                                continuation.finish(throwing: CompiledGraphError.executionError("Embed stream stopped because user paused it"))
+                                // Break from main loop due to pause
+                                return
+                            }
+                            
                             guard let currentStateEmbed  else {
                                 continuation.finish(throwing: CompiledGraphError.executionError("failed iterate on embed stream! last state is nil"))
                                 return
@@ -1213,6 +1266,19 @@ extension StateGraph {
                         
                         continuation.yield(output)
                         
+                        // Check for external pause requests after yielding output
+                        if shouldPauseExecution() {
+                            // Add Checkpoint to help resume it properly
+                            if let saver = compileConfig?.checkpointSaver {
+
+                                let _ = try saver.put(config: config,
+                                        checkpoint: .init(state: currentState.data.clone(),
+                                            nodeId: currentNodeId,
+                                            nextNodeId: nextNodeId))
+                            }
+                            continuation.finish(throwing: CompiledGraphError.executionError("Pausing as user requested it"))
+                            return
+                        }
 
                     } while(nextNodeId != END && !Task.isCancelled)
                     
@@ -1243,6 +1309,41 @@ extension StateGraph {
                 throw CompiledGraphError.executionError("no state has been produced! probably processing has been interrupted")
             }
             return result[0].state
+        }
+
+                /**
+         Pauses the graph execution externally.
+         
+         This method sets a flag to pause the stream execution at the next checkpoint.
+         The stream will terminate early and save its state to the checkpoint saver.
+         Use GraphInput.resume to continue execution from where it was paused.
+         */
+        public func pause() {
+            pauseLock.lock()
+            defer { pauseLock.unlock() }
+            _shouldPause = true
+        }
+        
+        /**
+         Clears the pause flag.
+         
+         This method resets the pause state, typically called when starting a new execution.
+         */
+        public func clearPause() {
+            pauseLock.lock()
+            defer { pauseLock.unlock() }
+            _shouldPause = false
+        }
+        
+        /**
+         Checks if execution should pause and terminate early.
+         
+         - Returns: true if execution should be paused and terminated
+         */
+        private func shouldPauseExecution() -> Bool {
+            pauseLock.lock()
+            defer { pauseLock.unlock() }
+            return _shouldPause
         }
         
         /**
