@@ -1184,7 +1184,7 @@ extension StateGraph {
                                         nextNodeId: nextNodeId))
                             }
 
-                            continuation.finish(throwing: CompiledGraphError.executionError("Execution paused by user"))
+                            continuation.finish()
                             return
                         }
                         
@@ -1231,7 +1231,7 @@ extension StateGraph {
                                                 nodeId: currentNodeId,
                                                 nextNodeId: nextNodeId))
                                 }
-                                continuation.finish(throwing: CompiledGraphError.executionError("Embed stream stopped because user paused it"))
+                                continuation.finish()
                                 // Break from main loop due to pause
                                 return
                             }
@@ -1276,7 +1276,7 @@ extension StateGraph {
                                             nodeId: currentNodeId,
                                             nextNodeId: nextNodeId))
                             }
-                            continuation.finish(throwing: CompiledGraphError.executionError("Pausing as user requested it"))
+                            continuation.finish()
                             return
                         }
 
