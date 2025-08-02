@@ -333,10 +333,6 @@ extension AgentState {
     /// - Parameter key: The key for which to return the corresponding value.
     /// - Returns: The value associated with `key` as type `T`, or `nil` if the key does not exist or the value cannot be cast to type `T`.
     public func value<T>(_ key: String) -> T? {
-        guard let value = data[key] else {
-            return nil
-        }
-        
         // First try direct casting
         if let directValue = value as? T {
             print("Value \(key) successfully cast to \(T.self)")
