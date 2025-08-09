@@ -1445,7 +1445,18 @@ extension StateGraph {
         }
 
         
-        
+        public func getCurrentState(config: RunnableConfig) throws -> AgentState {
+            print("Getting the state now")
+            guard let saver = compileConfig?.checkpointSaver else {
+                throw CompiledGraphError.executionError("State request checkpoint saver!")
+            }
+            guard let startCheckpoint = saver.get( config: config ) else {
+                throw CompiledGraphError.executionError("State request without a checkpoint!")
+            }
+
+            let currentState = stateFactory(startCheckpoint.state);
+            return currentState 
+        }
     }
 
 
